@@ -28,6 +28,7 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <errno.h>
 
 #define MAX_ADDR_LEN 15
 #define MAX_THREADS 100 // Arbitrary number, may need to calculate in the future...
@@ -200,6 +201,7 @@ void scan_thread(struct thread_args *arg)
 {
     struct sockaddr_in scan_struct;
     char dnsname[NI_MAXHOST + 1];
+    char servname[NI_MAXSERV + 1];
     in_addr_t test = arg->first;
 
     memset(&scan_struct, 0, sizeof(scan_struct));
@@ -212,20 +214,54 @@ void scan_thread(struct thread_args *arg)
 
         scan_struct.sin_addr.s_addr = htonl(test);
 
-        if(getnameinfo((struct sockaddr *)&scan_struct,
-            sizeof(struct sockaddr_in), dnsname, NI_MAXHOST, 0,
-            0, NI_NAMEREQD | NI_DGRAM) == 0)
+        int result = getnameinfo(
+            (struct sockaddr *)&scan_struct,
+            sizeof(struct sockaddr_in),
+            dnsname,
+            NI_MAXHOST,
+            servname,
+            NI_MAXSERV,
+            NI_DGRAM | NI_NAMEREQD
+        );
+
+        char cip[MAX_ADDR_LEN + 1];
+        snprintf(cip, MAX_ADDR_LEN, "%i.%i.%i.%i", _HADDR(test));
+
+        switch(result) {
+        case EAI_AGAIN:
+            fprintf(stderr, "%s: could not be resolved at this time.\n", cip);
+            break;
+        case EAI_BADFLAGS:
+            fprintf(stderr, "%s: Bad flags\n", cip);
+            break;
+        case EAI_FAIL:
+            fprintf(stderr, "%s: Failure occured\n", cip);
+            break;
+        case EAI_FAMILY:
+            fprintf(stderr, "%s: Address family not recognized\n", cip);
+            break;
+        case EAI_MEMORY:
+            fprintf(stderr, "%s: OUT OF MEMORY!\n", cip);
+            break;
+        case EAI_NONAME:
+            //fprintf(stderr, "%s: No hostname found\n", cip);
+            break;
+        case EAI_OVERFLOW:
+            fprintf(stderr, "%s: Host or serv name buffer too small\n", cip);
+            break;
+        case EAI_SYSTEM:
+            fprintf(stderr, "%s: A system error occured: %d\n", cip, errno);
+            break;
+        default:
         {
-            char cip[MAX_ADDR_LEN + 1];
             int i;
 
             if(!arg->scan_data->silent)
             {
-                snprintf(cip, MAX_ADDR_LEN, "%i.%i.%i.%i", _HADDR(test));
                 i = PAD_ADDRITEM - strlen(cip);
 
                 _SPIN_START(arg->scan_data->lock);
-                fprintf(stderr, "%s\033[%iC \t%s\n", cip, i, dnsname);
+                fprintf(stderr, "%s\033[%iC \t%s, %s\n", cip, i, dnsname, servname);
                 _SPIN_END(arg->scan_data->lock);
             }
 
@@ -234,6 +270,7 @@ void scan_thread(struct thread_args *arg)
             if(arg->log)
                 fprintf(arg->fp, "%i.%i.%i.%i \t%s\n",
                     _HADDR(test), dnsname);
+        }
         }
 
         update_interface(test, arg->scan_data);
